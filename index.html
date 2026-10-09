@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Ritos · Grupo Plural</title>
+<meta name="description" content="Quadro de Ritos do Grupo Plural: rotinas, checklists e reuniões.">
+<meta name="robots" content="noindex, nofollow">
+<meta name="theme-color" content="#101010">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Ritos">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icone-180.png">
+<link rel="icon" type="image/png" sizes="32x32" href="favicon-32.png">
+<link rel="icon" type="image/png" sizes="192x192" href="icone-192.png">
+<!--
+  Ritos · Grupo Plural — a página que vira o app no celular.
+
+  O app em si mora no Google Apps Script e roda aqui dentro de um iframe.
+  Esta página existe por três motivos:
+    1. Ícone com a marca: o iPhone só usa o ícone de uma página que ele
+       consegue ler (apple-touch-icon); a do Google ele não deixa trocar.
+    2. Abrir em tela cheia, como app, com o nome "Ritos".
+    3. Guardar o login. O armazenamento do app dentro do iframe é de outro
+       domínio e o celular pode apagá-lo; o desta página, não. O app avisa
+       quando entra ou sai (postMessage) e pergunta pela sessão ao abrir.
+
+  Nada de dado do grupo passa por aqui: só o token de sessão do aparelho, que
+  já ficava no próprio aparelho antes.
+-->
+<style>
+  html, body { margin: 0; height: 100%; background: #101010; }
+  body { overflow: hidden; }
+  #app { position: fixed; inset: 0; width: 100%; height: 100%; border: 0; display: block; background: #fff; }
+
+  /* Faixa de instalação: só no navegador (não no app instalado), só depois
+     de a pessoa entrar, e some para sempre quando ela fecha. */
+  #inst { position: fixed; left: 10px; right: 10px; bottom: calc(10px + env(safe-area-inset-bottom));
+          background: #101010; color: #fff; border-radius: 14px; padding: 12px 12px 12px 14px;
+          font: 500 14px/1.35 -apple-system, system-ui, "Segoe UI", Roboto, sans-serif;
+          display: none; align-items: center; gap: 12px; box-shadow: 0 8px 28px rgba(0,0,0,.35); z-index: 5; }
+  #inst.on { display: flex; }
+  #inst img { width: 40px; height: 40px; border-radius: 9px; flex: none; }
+  #inst .tx { flex: 1; }
+  #inst .tx b { display: block; font-weight: 700; }
+  #inst .tx span { color: #bbb; font-size: 13px; }
+  #inst button { font: inherit; border: 0; border-radius: 9px; cursor: pointer; }
+  #inst .ok { background: #fff; color: #101010; font-weight: 700; padding: 9px 12px; }
+  #inst .x { background: transparent; color: #999; font-size: 20px; padding: 4px 6px; }
+
+  #passos { position: fixed; inset: 0; background: rgba(0,0,0,.55); display: none; z-index: 6;
+            align-items: flex-end; justify-content: center; }
+  #passos.on { display: flex; }
+  #passos .cx { background: #fff; color: #101010; width: 100%; max-width: 460px; border-radius: 18px 18px 0 0;
+                padding: 20px 20px calc(22px + env(safe-area-inset-bottom));
+                font: 400 15px/1.45 -apple-system, system-ui, "Segoe UI", Roboto, sans-serif; }
+  #passos h2 { font-size: 18px; margin: 0 0 12px; }
+  #passos ol { margin: 0; padding-left: 22px; }
+  #passos li { margin-bottom: 8px; }
+  #passos .k { display: inline-block; border: 1.5px solid #101010; border-radius: 6px; padding: 0 6px; font-weight: 700; }
+  #passos .nota { margin-top: 12px; background: #f3f3f3; border-radius: 10px; padding: 10px 12px; font-size: 14px; }
+  #passos button { margin-top: 14px; width: 100%; background: #101010; color: #fff; border: 0; border-radius: 10px;
+                   padding: 12px; font: 600 15px system-ui, sans-serif; }
+</style>
+</head>
+<body>
+<iframe id="app" title="Ritos · Grupo Plural" allow="camera; clipboard-write; fullscreen"></iframe>
+
+<div id="inst" role="dialog" aria-label="Instalar o app">
+  <img src="icone-192.png" alt="">
+  <div class="tx"><b>Coloque o Ritos na tela inicial</b><span>Abre direto e fica sempre conectado.</span></div>
+  <button class="ok" type="button" id="inst-ok">Instalar</button>
+  <button class="x" type="button" id="inst-x" aria-label="Agora não">×</button>
+</div>
+
+<div id="passos" role="dialog" aria-label="Como instalar">
+  <div class="cx">
+    <h2 id="passos-t">Como instalar</h2>
+    <ol id="passos-l"></ol>
+    <div class="nota" id="passos-n"></div>
+    <button type="button" id="passos-ok">Entendi</button>
+  </div>
+</div>
+
+<script>
+(function () {
+  'use strict';
+  // O endereço publicado do Apps Script. É o mesmo desde a v4 e não muda
+  // entre versões (a implantação é sempre editada, nunca recriada).
+  var EXEC = 'https://script.google.com/macros/s/AKfycbw1e78QTnaBgvQbFvtC4vGBbDU_3_YLueTR6Qy0zlyS_zzBVneWjSRUOvP6tOtbuZXI/exec';
+  // De onde o app fala com esta página: o "sandbox" do Apps Script.
+  var ORIGEM_APP = /^https:\/\/[a-z0-9-]+\.googleusercontent\.com$/;
+  var CHAVE = 'ritos_gp_sessao';
+  var CHAVE_INST = 'ritos_gp_inst_fechado';
+
+  function ler(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
+  function gravar(k, v) { try { if (v === null) localStorage.removeItem(k); else localStorage.setItem(k, v); } catch (e) {} }
+
+  // Convite, confirmação e link de acesso chegam aqui (?convite=, ?cf=, ?t=)
+  // e seguem para o app. Depois saem da barra de endereço: se a pessoa
+  // instalar a partir desta tela, o ícone não pode levar o convite junto.
+  var q = location.search || '';
+  document.getElementById('app').src = EXEC + q;
+  if (q && history.replaceState) history.replaceState(null, '', location.pathname);
+
+  var temSessao = !!ler(CHAVE);
+
+  window.addEventListener('message', function (ev) {
+    if (!ORIGEM_APP.test(ev.origin)) return;
+    var d = ev.data || {};
+    if (d.ritos === 'pedir') {
+      if (ev.source) ev.source.postMessage({ ritos: 'sessao', token: ler(CHAVE) }, ev.origin);
+    } else if (d.ritos === 'guardar' && typeof d.token === 'string' && /^[0-9a-f]{64}$/.test(d.token)) {
+      gravar(CHAVE, d.token);
+      if (!temSessao) { temSessao = true; talvezOferecer(); }
+      else talvezOferecer();
+    } else if (d.ritos === 'apagar') {
+      gravar(CHAVE, null);
+      temSessao = false;
+    }
+  });
+
+  /* ---------- instalar ---------- */
+  var ua = navigator.userAgent || '';
+  var ios = /iPhone|iPad|iPod/.test(ua) || (/Macintosh/.test(ua) && 'ontouchend' in document);
+  var android = /Android/.test(ua);
+  var samsung = /SamsungBrowser/.test(ua);
+  var instalado = (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) ||
+                  window.navigator.standalone === true;
+  var pedidoAndroid = null;   // o "Instalar" de verdade do Chrome, quando ele oferece
+
+  window.addEventListener('beforeinstallprompt', function (e) {
+    e.preventDefault();
+    pedidoAndroid = e;
+    talvezOferecer();
+  });
+  window.addEventListener('appinstalled', function () {
+    document.getElementById('inst').classList.remove('on');
+    gravar(CHAVE_INST, '1');
+  });
+
+  var oferecido = false;
+  function talvezOferecer() {
+    if (oferecido || instalado || !temSessao || ler(CHAVE_INST)) return;
+    if (!ios && !android) return;   // no computador não atrapalha
+    oferecido = true;
+    // Espera o app terminar de abrir: a faixa não pode cobrir a primeira tela.
+    setTimeout(function () { document.getElementById('inst').classList.add('on'); }, 2500);
+  }
+  talvezOferecer();
+
+  document.getElementById('inst-x').onclick = function () {
+    document.getElementById('inst').classList.remove('on');
+    gravar(CHAVE_INST, '1');
+  };
+  document.getElementById('inst-ok').onclick = function () {
+    if (pedidoAndroid) {
+      pedidoAndroid.prompt();
+      pedidoAndroid.userChoice.then(function (r) {
+        if (r && r.outcome === 'accepted') {
+          document.getElementById('inst').classList.remove('on');
+          gravar(CHAVE_INST, '1');
+        }
+      });
+      pedidoAndroid = null;
+      return;
+    }
+    mostrarPassos();
+  };
+
+  function mostrarPassos() {
+    var l = document.getElementById('passos-l'), n = document.getElementById('passos-n');
+    if (ios) {
+      l.innerHTML =
+        '<li>Toque em <span class="k">⋯</span> na barra de baixo, à direita. ' +
+        '(Em iPhones mais antigos, toque direto no botão <b>Compartilhar</b>, o quadrado com a seta ↑.)</li>' +
+        '<li>Toque em <b>Compartilhar</b>.</li>' +
+        '<li>Role a lista e toque em <b>Adicionar à Tela de Início</b>.</li>' +
+        '<li>Deixe <b>Abrir como App Web</b> ligado e toque em <b>Adicionar</b>.</li>';
+      n.innerHTML = 'Na primeira vez que abrir pelo ícone, digite seu e-mail e o <b>código de 6 números</b> ' +
+        'que chegar. Depois disso o app fica conectado.';
+    } else if (samsung) {
+      l.innerHTML =
+        '<li>Toque em <span class="k">≡</span> na barra de baixo.</li>' +
+        '<li>Toque em <b>Adicionar página a</b> e depois em <b>Tela inicial</b>.</li>' +
+        '<li>Confirme em <b>Adicionar</b>.</li>';
+      n.innerHTML = 'Se o app pedir para entrar, use seu e-mail e o código de 6 números que chegar.';
+    } else {
+      l.innerHTML =
+        '<li>Toque em <span class="k">⋮</span> no canto de cima, à direita.</li>' +
+        '<li>Toque em <b>Instalar app</b> ou <b>Adicionar à tela inicial</b>.</li>' +
+        '<li>Confirme em <b>Instalar</b> (ou <b>Adicionar</b>).</li>';
+      n.innerHTML = 'Se o app pedir para entrar, use seu e-mail e o código de 6 números que chegar.';
+    }
+    document.getElementById('inst').classList.remove('on');
+    document.getElementById('passos').classList.add('on');
+  }
+  document.getElementById('passos-ok').onclick = function () {
+    document.getElementById('passos').classList.remove('on');
+  };
+})();
+</script>
+</body>
+</html>
